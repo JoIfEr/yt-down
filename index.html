@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipfetch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eef1f6; --panel: #ffffff; --ink: #101a33; --muted: #5b6785;
+    --line: #d3d9e6; --accent: #2442ff; --accent-ink: #ffffff; --bad: #b3261e;
+    --font: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e1424; --panel: #151d33; --ink: #e9edf8; --muted: #93a0c2;
+            --line: #2a3555; --accent: #6b80ff; --accent-ink: #0e1424; --bad: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 400 16px/1.5 var(--font);
+         min-height: 100vh; padding: max(20px, env(safe-area-inset-top)) 20px 40px; }
+  main { max-width: 540px; margin: 0 auto; }
+  h1 { font-weight: 800; font-size: clamp(2.6rem, 11vw, 3.8rem); line-height: .95;
+       letter-spacing: -.035em; margin: 28px 0 10px; }
+  .lede { color: var(--muted); margin: 0 0 28px; max-width: 34ch; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .row { display: flex; gap: 8px; }
+  input[type=url] { flex: 1; min-width: 0; font: inherit; color: var(--ink); background: var(--panel);
+       border: 2px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  input[type=url]:focus { outline: none; border-color: var(--accent); }
+  button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 10px; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .primary { background: var(--accent); color: var(--accent-ink); border: 0; padding: 12px 18px; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .wide { width: 100%; padding: 15px; font-size: 1.05rem; margin-top: 18px; }
+  .msg { min-height: 1.5em; margin: 10px 0 0; color: var(--muted); }
+  .msg.error { color: var(--bad); }
+  .video { display: flex; gap: 14px; margin: 26px 0 22px; align-items: center; }
+  .video img { width: 128px; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; background: var(--line); }
+  .video h2 { font-size: 1.05rem; line-height: 1.25; margin: 0 0 2px; }
+  .video p { margin: 0; color: var(--muted); font-size: .9rem; }
+  fieldset { border: 0; padding: 0; margin: 0; }
+  legend { font-weight: 600; margin-bottom: 8px; padding: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips input { position: absolute; opacity: 0; pointer-events: none; }
+  .chips span { display: inline-block; padding: 9px 14px; border: 2px solid var(--line);
+       border-radius: 999px; background: var(--panel); cursor: pointer; font-weight: 600; }
+  .chips input:checked + span { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .chips input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .bar { height: 14px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 22px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .hidden { display: none; }
+  small { display: block; margin-top: 30px; color: var(--muted); font-size: .82rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clipfetch</h1>
+  <p class="lede">Paste a YouTube link, choose a resolution, and save the file to this device.</p>
+
+  <label for="url">YouTube link</label>
+  <div class="row">
+    <input id="url" type="url" inputmode="url" autocomplete="off" placeholder="https://youtube.com/watch?v=…">
+    <button id="lookup" class="primary">Look up</button>
+  </div>
+  <p id="msg" class="msg" role="status"></p>
+
+  <section id="result" class="hidden">
+    <div class="video">
+      <img id="thumb" alt="">
+      <div><h2 id="title"></h2><p id="meta"></p></div>
+    </div>
+    <fieldset>
+      <legend>Quality</legend>
+      <div id="chips" class="chips"></div>
+    </fieldset>
+    <button id="go" class="primary wide">Download</button>
+    <div id="barwrap" class="bar hidden"><i id="bar"></i></div>
+  </section>
+
+  <small>Only download videos you own or have permission to save. Downloading may breach YouTube's Terms of Service.</small>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const msg = (t, err) => { $('#msg').textContent = t; $('#msg').className = 'msg' + (err ? ' error' : ''); };
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                       body: JSON.stringify(body) } : undefined);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'Request failed.');
+  return j;
+}
+const fmtTime = s => s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : '';
+const names = { 2160: '4K', 1440: '1440p' };
+
+$('#lookup').onclick = async () => {
+  const url = $('#url').value.trim();
+  if (!url) return msg('Paste a link first.', true);
+  $('#lookup').disabled = true; $('#result').classList.add('hidden'); msg('Looking up video…');
+  try {
+    const v = await api('/api/info', { url });
+    $('#thumb').src = v.thumbnail || '';
+    $('#title').textContent = v.title;
+    $('#meta').textContent = [v.uploader, fmtTime(v.duration)].filter(Boolean).join(', ');
+    const opts = v.heights.map(h => [h, (names[h] || h + 'p')]).concat([['audio', 'Audio only (MP3)']]);
+    $('#chips').innerHTML = opts.map(([val, label], i) =>
+      `<label><input type="radio" name="q" value="${val}" ${i === 0 ? 'checked' : ''}><span>${label}</span></label>`).join('');
+    $('#result').classList.remove('hidden'); $('#barwrap').classList.add('hidden');
+    $('#go').disabled = false; msg('');
+  } catch (e) { msg(e.message, true); }
+  $('#lookup').disabled = false;
+};
+$('#url').addEventListener('keydown', e => { if (e.key === 'Enter') $('#lookup').click(); });
+
+$('#go').onclick = async () => {
+  const quality = document.querySelector('input[name=q]:checked').value;
+  $('#go').disabled = true; $('#barwrap').classList.remove('hidden'); $('#bar').style.width = '0';
+  msg('Starting…');
+  try {
+    const { job } = await api('/api/start', { url: $('#url').value.trim(), quality });
+    while (true) {
+      await new Promise(r => setTimeout(r, 800));
+      const s = await api('/api/status/' + job);
+      $('#bar').style.width = s.progress + '%';
+      msg(`${s.stage}… ${Math.round(s.progress)}%`);
+      if (s.status === 'error') throw new Error(s.error);
+      if (s.status === 'done') break;
+    }
+    msg('Done. Your device is saving the file.');
+    window.location.href = '/api/file/' + job;
+  } catch (e) { msg(e.message, true); }
+  $('#go').disabled = false;
+};
+</script>
+</body>
+</html>
